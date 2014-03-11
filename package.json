@@ -1,0 +1,33 @@
+{
+  "name": "mullet",
+  "version": "0.0.1",
+  "description": "Developer-friendly & modular CMS for static or dynamic websites.",
+  "main": "index.js",
+  "dependencies": {
+    "express": "3.x",
+    "underscore": "~1.5.2",
+    "rsvp": "~3.0.3",
+    "walk": "~2.2.1"
+  },
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git://github.com/sterlingwes/mullet.git"
+  },
+  "keywords": [
+    "CMS",
+    "framework",
+    "static",
+    "generate",
+    "routing",
+    "publishing"
+  ],
+  "author": "Wes Johnson",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/sterlingwes/mullet/issues"
+  },
+  "homepage": "https://github.com/sterlingwes/mullet"
+}
