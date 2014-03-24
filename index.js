@@ -1,61 +1,53 @@
-var express = require('express'),
-    http    = require('http'),
-    path    = require('path'),
-    _       = require('underscore');
+var _ = require('underscore');
 
-var appPath = path.dirname(require.main.filename).replace(/\\/g,'/'),
-    mulletPath = require.resolve('mullet').replace(/\/index\.js$/,'').replace(/\\/g,'/'),
-    app = express();
+require('./config');
 
-app.use(express.bodyParser());
-
-global.Mullet = {
+var api = {
     
-    config:
-    {
-        port:           3000,
-        path:           appPath,
-        mulletPath:     mulletPath,
-        mainApp:        '', // app served at node root (ie 'localhost:3000/')
-        adminHost:      '', // host for admin site in a multi-site environment
-        dbdriver:       'db_file',
-        siteTitle:      '',
-        devel:          true,
-        cleanOnStart:   false,
-        sessions:       {},
-		app:			app,
-		_express:		express,
-        _apps:          {}  // filled at runtime, not an option
+    init: function(config) {
+        
+        if(typeof config === "object")
+        {
+            for(key in config)
+            {
+                if(typeof Mullet.config[key] !== 'undefined')
+                    Mullet.config[key] = config[key]; // only override defaults
+            }
+        }
+
+        Mullet._appman = require('./apps.js')(Mullet.config);
+        return Mullet._appman;
     },
     
-    express:    app
+    start: function(config) {
+
+        var app = api.init(config);
+        
+        Mullet.app.setup()
+        
+            .then(function(apps) {
+                if(!apps)
+                    return console.error('! Failed to load any apps, ending.');
+
+                _.extend(Mullet.config._apps, apps);
+
+                if(Mullet.config.runOnInit) {
+                    Mullet.app.listen(3000);
+                    console.log('- Listening on port 3000');
+                }
+
+            }).catch(function(err) {
+                console.error('!!! ', err.stack);
+            });
+    },
+    
+    traverse: function(config) {
+        
+        var app = api.init(config);
+        return Mullet.app.traverseAll();
+        
+    }
     
 };
 
-exports.start = function(config) {
-    if(typeof config === "object")
-    {
-        for(key in config)
-        {
-            if(typeof Mullet.config[key] !== 'undefined')
-                Mullet.config[key] = config[key]; // only override defaults
-        }
-    }
-    
-    Mullet._appman = require('./apps.js')(Mullet.config);
-    
-    Mullet._appman.setup()
-    
-        .then(function(apps) {
-            if(!apps)
-                return console.error('! Failed to load any apps, ending.');
-            
-            _.extend(Mullet.config._apps, apps);
-            
-            app.listen(3000);
-            console.log('- Listening on port 3000');
-            
-        }).catch(function(err) {
-            console.error('!!! ', err.stack);
-        });
-};
+module.exports = api;

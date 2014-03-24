@@ -7,10 +7,15 @@
     "express": "3.x",
     "underscore": "~1.5.2",
     "rsvp": "~3.0.3",
-    "walk": "~2.2.1"
+    "walk": "~2.2.1",
+    "jasmine-node": ""
   },
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "jasmine-node spec"
+  },
+  "preferGlobal": "true",
+  "bin": {
+    "mullet": "cli.js"
   },
   "repository": {
     "type": "git",

@@ -1,8 +1,9 @@
-var RSVP = require('rsvp'),
+var PromiseApi = require('es6-promise')
+    Promise = PromiseApi.Promise,
     fs = require('fs'),
-    modPath = require.resolve('mullet').replace(/[\/\\]index\.js$/,'').replace(/\\/g,'/'),
     _ = require('underscore'),
-    walk = require('walk');
+    walk = require('walk'),
+    topo = require('toposort');
 
 Apps.STRIP_COMMENTS = /((\/\/.*$)|(\/\*[\s\S]*?\*\/))/mg;
 Apps.DIR = 'apps';
@@ -32,7 +33,7 @@ Apps.prototype.traverse = function(basePath, existing) {
         compPath = [ basePath, Apps.DIR ].join('/'),
         apps = existing || {},
         
-        promise = new RSVP.Promise(function(resolve, reject) {
+        promise = new Promise(function(resolve, reject) {
             
             walker = walk.walk(compPath, {
                 followLinks: true,
@@ -59,7 +60,7 @@ Apps.prototype.traverse = function(basePath, existing) {
                         }
 
                         dir.files = {};
-                        dir.core = basePath == modPath,
+                        dir.core = basePath == selfi.config.mulletPath,
                         dir.base = [basePath, Apps.DIR, dirName].join('/');
                         
                         if(typeof compLoc === "object")
@@ -70,41 +71,6 @@ Apps.prototype.traverse = function(basePath, existing) {
                 }
                 next();
             });
-            
-			/*
-            walker.on('file', function(root, fstat, next) {
-                
-                var dots = fstat.name.split('.'),
-                    type = dots.pop().toLowerCase();
-                
-                var compRoot = root.replace(compPath,'').replace(/^\//,''),
-                    fullPath = [ root, fstat.name ].join('/');
-                                
-                if(compRoot) { // make sure we're in an app folder
-                    
-                    var pathParts = compRoot.split('/'),
-                        parent = pathParts.shift().toLowerCase(),
-                        finfo;
-                    
-                    if(!filetypes[type]) {
-                        //console.error('? '+parent+': unknown file type: '+type+', ignored');
-                        next(); return;
-                    }
-                    
-                    if(!filetypes[type].locations || !_.contains(filetypes[type].locations, (pathParts[0]||'').toLowerCase())) {
-                        next(); return;
-                    }
-                    
-                    if(!apps[parent])
-                        apps[parent] = {files:{}};
-                    
-                    finfo = apps[parent].files[fullPath] = _.pick(fstat, 'mtime','name');
-                    finfo.type = type;
-                    finfo.location = pathParts[0]||'';
-                    finfo.handlers = filetypes[type].handlers;
-                }
-                next();
-            });*/
             
             walker.on('errors', function(root, nodeStatsArray, next) {
                 console.error('! File system traverse errors');
@@ -135,8 +101,25 @@ Apps.prototype.getDeps = function(func) {
     return result;
 };
 
+/**
+ * getAppArgs() - grabs arguments required by apps that return an object prototype
+ *                the Object.constructorArgs parameter (array) of the object defines
+ *                which arguments should be passed to the constructor on instantiation
+ *                before injecting the object instance into the app upon which it depends
+ * 
+ * TODO: probably shouldn't require devs to explicitly define 'constructorArgs'
+ * 
+ * - app, object hash of app properties (mullet configuration and package.json mashup)
+ * - args, array of strings corresponding to the properties that should be passed to the
+ *   object instance. appName means app['name'], whereas simply 'app' clones the entire
+ *   object in the first parameter to getAppArgs
+ */
 Apps.prototype.getAppArgs = function(app, args) {
 	var appArgs = _.map(args, function(arg) {
+        
+        if(arg == 'app')
+            return _.clone(app);
+        
 		var path = arg.split('.')
 		  , firstArg = path.shift();
 		  
@@ -161,115 +144,17 @@ Apps.prototype.getAppArgs = function(app, args) {
 	return appArgs;
 };
 
-/**
- * require() - searches mullet app directory and mullet module apps directory
- *
- * - modname: string, app required
- * - apps: object hash, app state and runtime properties
- *
- * returns result of native require() (should be app api returned from main.js)
- **/
-Apps.prototype.require = function(modname, apps) {
-
-    var req,
-        count = 0,
-        searchPaths = [
-            [this.path, Apps.DIR, modname, Apps.MAIN].join('/'), // appPath
-            [modPath, Apps.DIR, modname, Apps.MAIN].join('/') // modPath
-        ],
-        selfi = this;
-		
-	var mod = apps[modname];
-
-	if(mod && !mod.isLoaded)
-	{   
-		if(_.every(mod.deps, function(dep) {
-			if(["config","req"].indexOf(dep)!=-1)
-				return true;
-			
-			return apps[dep] && apps[dep].isLoaded;
-		}))
-		{
-			// load deps for injection
-			var deps = _.map(mod.deps, function(dep) {
-				switch(dep) {
-					case "config":
-						return _.clone(selfi.config);
-					case "req":
-						return selfi.require.bind(selfi);
-				}
-				
-				var api = apps[dep] ? apps[dep].api : false;
-				
-				if(api && api.constructorArgs) {
-					api = new (api.bind.apply(api, selfi.getAppArgs(mod, api.constructorArgs)))();
-				}
-					
-				return api;
-			});
-			
-			// returned value becomes the app's exposed controller class
-			if(mod && typeof mod.main ===  "function") {
-				console.log('  - '+modname);
-				req = mod.api = mod.main.apply(null, deps);
-			}
-			if(!mod) mod = {};
-			if(!mod.api) req = mod.api = false;
-			
-			mod.isLoaded = true;
-			this.loaded++;
-		}
-		else
-			this.skipped = true;
-	}
-	else if(mod && (mod.isLoaded || mod.api)) {
-        req = mod.api;
-		this.loaded++;
-	}
-	else {
-    
-		while(!req && count < 2) {
-			var path = searchPaths[count];
-			try {
-				var reqFn = require(path);
-				if(apps && typeof apps === "object") {
-					var deps = this.getDeps(reqFn),
-						depsArray = _.map(deps, function(dep) {
-							switch(dep) {
-								case "config":
-									return _.clone(selfi.config);
-								case "req":
-									return selfi.require.bind(selfi);
-							}
-							
-							return apps[dep] ? apps[dep].api : false;
-						});
-					
-					req = reqFn.apply(null, depsArray);
-				}
-				else
-					req = reqFn();
-					
-				var app = mod || { name: modname };
-				
-				app.api = req;
-				app.isLoaded = true;
-			}
-			catch(e) {
-				if(e.code != 'MODULE_NOT_FOUND') {
-					console.error('! Apps.require("'+modname+'") failed due to error in app', e.stack);
-					this.loaded++; // avoid infiniloop
-				}
-			}
-			count++;
-		}
-		
-		if(!req)    console.warn('! No apps named '+modname+' could be found.');
-	}
-    
-    return req;
-};
-
+/*
+ * buildDepTree - iterates over the apps to grab dependencies
+ * 
+ * - apps, object hash of all apps found in the file system
+ * - roots, array of strings or objects of the form witnessed in 'apps', above, representing all
+ *   "entry" apps (those with vhost specified that serve to specific domains)
+ * - depTree, an array of strings representing deps found. Undefined for the initial call.
+ *   Iterative calls to buildDepTree will pass the latest copy of the tree here.
+ * 
+ * returns array of dep names sorted by the order in which they should be called based on depFor
+ */
 Apps.prototype.buildDepTree = function(apps, roots, depTree) {
 
 	var tree = _.isArray(depTree) ? depTree.slice(0) : []
@@ -293,146 +178,252 @@ Apps.prototype.buildDepTree = function(apps, roots, depTree) {
 		}
 	});
 	
-	return _.uniq(tree);
+    return _.uniq(tree);
 
 };
 
+/*
+ * getLoadOrder() - uses list of apps from buildDepTree to determine load order via
+ *                  topological sort
+ * 
+ * - apps, object
+ * - appList, array of strings for app names to get edges for
+ * 
+ * returns array of strings for first valid load order
+ */
+Apps.prototype.getLoadOrder = function(apps, appList) {
+    
+    var edges = [];
+
+    _.each(appList, function(name) {
+        var app = apps[name];
+        if(!app)    return;
+        [].push.apply(edges, _.map(app.deps, function(dep) {
+            return [ app.name, dep ];
+        }));
+    });
+    
+    edges = topo(edges);
+    edges.reverse();
+    return edges;
+    
+};
+
+/*
+ * buildInfo() - loads app runtime info and returns (goes into this.apps)
+ */
+Apps.prototype.buildInfo = function(dirs) {
+    var apps = {}
+      , selfi = this;
+    
+    _.each(dirs, function(dir) {
+        var cmain = dir || {},
+            name = dir.name,
+            reqpath = [dir.base, Apps.MAIN].join('/'),
+            infpath = [dir.base, 'package.json'].join('/');
+
+        try {
+            cmain.main = require(reqpath);
+        } catch(e) {
+            if(e.code == 'MODULE_NOT_FOUND')
+                console.error('! Mullet app "'+name+'" not loaded. Did you forget your main.js file? ', e);
+            else
+                console.error('! require('+reqpath+') ' + e.stack);
+
+            return;
+        }
+
+        // try loading package.json, fail silently
+        try {
+            cmain.info = require(infpath);
+        } catch(e) {}
+
+        if(typeof cmain !== "object" && typeof cmain !== "function") {
+            console.error('! Mullet app "'+name+'" invalid type, no load method in exported object.', typeof cmain);
+            return;
+        }
+
+        var deps = _.map(selfi.getDeps(cmain.main), function(dep) {
+            return dep=='db__DRIVER' ? selfi.config.dbdriver : dep;
+        });
+
+        apps[name] = _.extend(cmain, {
+            deps:       deps,
+            depFor:     []
+        });
+    });
+
+    // add to depFor tracking list for reliant apps
+
+    _.each(apps, function(app) {
+        if(_.isArray(app.deps))
+            _.each(app.deps, function(dep) {
+                if(!apps[dep])  return;
+                var depFor = apps[dep].depFor;
+                if(depFor.indexOf(app.name)==-1)
+                    depFor.push(app.name);
+            });
+    });
+
+    return apps;
+};
+
+/*
+ * load() - loads the designated app api into memory from the return value of main()
+ *          also handles dependency injection from previously loaded apps
+ * 
+ * - appName, string
+ * 
+ * returns variant representing api for testing purposes / Promise chaining
+ */
+Apps.prototype.load = function(appName) {
+    
+    var mod = this.apps[appName];
+
+    switch(appName) {
+        case "config":
+            var api = _.clone(this.config);
+            this.apps.config = {
+                name:   'config',
+                api:    api
+            };
+            return api;
+    }
+    
+    if(!mod)
+        return;
+    
+    if(mod.api)
+        return this.apps[appName].api;
+    
+    var selfi = this;
+    
+    // load deps for injection
+    var deps = _.map(mod.deps, function(dep) {
+
+        var api = selfi.apps[dep] ? selfi.apps[dep].api : false;
+
+        if(typeof api === 'function') {
+            api = new (api.bind.apply(api, selfi.getAppArgs(mod, api.constructorArgs || selfi.getDeps(api))))();
+        }
+
+        return api;
+    });
+
+    // returned value becomes the app's exposed controller class
+    if(mod && typeof mod.main ===  "function") {
+        console.log('  - '+appName);
+        req = mod.api = mod.main.apply(null, deps);
+    }
+    if(!mod) mod = {};
+    if(!mod.api) req = mod.api = false;
+    
+    return mod.api;
+};
+
+/*
+ * loadApps() - coordinates async loading and checking for missing depedencies
+ * 
+ * - cs, object passed from traversing managed by setup()
+ * 
+ * returns a Promise that resolves to the final app hash
+ */
+Apps.prototype.loadApps = function(cs) {
+    this.apps = cs;
+    
+    var selfi = this,
+    
+        entryApps = _.filter(cs, function(c,name) {
+            var vhost = c && c.info && c.info.mullet && c.info.mullet.vhost;
+            return typeof vhost === 'string' ? true : false;
+        }),
+
+        allDeps = selfi.getLoadOrder(cs,selfi.buildDepTree(cs, entryApps)),
+
+        missing = _.filter(_.difference(allDeps, _.keys(cs)), function(appn) {
+            if(/^db_/.test(appn))   return false; // don't count db_* apps as missing, they should be injected with false when required as dep
+            return true;
+        });
+
+    var actualMissing = _.without(missing,'config','req');
+    if(actualMissing.length) {
+        console.error('! Missing app dependencies: '+ actualMissing.join(' ') + ' - check case?');
+        return cs;
+    }
+
+    var toload = _.without(allDeps, 'config').length;
+
+    console.log('+ Loading '+toload+' app'+(toload==1?'':'s'));
+
+    // load with promises for async main() resolving
+
+    return allDeps.reduce(function(lastApp, appName, index) {
+        var chain = lastApp.then(function(lastApi) {
+            /*if(index==0)
+                console.log('START');
+            else console.log(allDeps[index-1], typeof lastApi, lastApi && lastApi.constructor && lastApi.constructor.name);*/
+            
+            return selfi.load(appName);
+        });
+        
+        if(index == (allDeps.length-1))
+            chain.catch(function(err) {
+                console.error(err.stack);
+            });
+        
+        return chain;
+        
+    }, Promise.resolve()).then(function() {
+        return selfi.apps;
+    });
+};
+
+/*
+ * traverseAll() - gets the list of all apps
+ */
+Apps.prototype.traverseAll = function() {
+    var promise = Promise.resolve()
+      , selfi = this;
+        
+    return this.traverse(selfi.path) // app root
+    .then(function(dirs) {
+        return selfi.traverse(selfi.config.mulletPath, dirs); // mullet root
+    });
+};
+
 /**
- * setup() - loads apps
+ * setup() - coordinates app loading logic
  *
- * returns an object literal defining this application's apps
+ * returns a promise that resolves to the object literal defining this application's apps
  **/
 Apps.prototype.setup = function() {
     
-    var apps = {},
-        deps = [],
-        selfi = this;
+    var selfi = this;
     
     //
     // traverse known locations for app directories (app root and this app's root)
     //
-    return this.traverse(selfi.path) // app root
-    .then(function(dirs) {
-        return selfi.traverse(modPath, dirs); // mullet root
-    })
+    return this.traverseAll()
     
     //
     // locate app directories and determine dependencies
     //
     .then(function(dirs) {
-        
-        _.each(dirs, function(dir) {
-            var cmain = dir || {},
-                name = dir.name,
-                reqpath = [dir.base, Apps.MAIN].join('/'),
-                infpath = [dir.base, 'package.json'].join('/');
-            
-            try {
-                cmain.main = require(reqpath);
-            } catch(e) {
-                if(e.code == 'MODULE_NOT_FOUND')
-                    console.error('! Mullet app "'+name+'" not loaded. Did you forget your main.js file? ', e);
-                else
-                    console.error('! require('+reqpath+') ' + e.stack);
-                
-                return;
-            }
-            
-            // try loading package.json, fail silently
-            try {
-                cmain.info = require(infpath);
-            } catch(e) {}
-            
-            if(typeof cmain !== "object" && typeof cmain !== "function") {
-                console.error('! Mullet app "'+name+'" invalid type, no load method in exported object.', typeof cmain);
-                return;
-            }
-
-            var deps = selfi.getDeps(cmain.main);
-            
-            apps[name] = _.extend(cmain, {
-                deps:   deps
-            });
-        });
-        
-        return apps;
-        
-    }, function(e) {
-        if(e)
-            console.error('! Problem traversing directory '+ e.path);
+        return selfi.buildInfo(dirs);
     })
     
     //
     // load apps and instantiate in memory for cross app dependency injection
     //
     .then(function(cs) {
-        
-        var toload = 0, // app hash
-            lastload = -1;
-			
-        selfi.loaded = 0;
-        selfi.skipped = false;
-        
-        var entryApps = _.filter(cs, function(c,name) {
-				var vhost = c && c.info && c.info.mullet && c.info.mullet.vhost;
-				return typeof vhost === 'string' ? true : false;
-			}),
-			
-			allDeps = _.without(
-			
-				_.sortBy(selfi.buildDepTree(cs, entryApps), function(name) {
-					var a = cs[name]
-					  , inf = a && a.info && a.info.mullet
-					  , def = inf && inf.vhost ? 1000 : 0;
-					  
-					return inf && inf.priority ? inf.priority : def;
-				}), 
-			
-				'config', 'req'), // without
-            
-            missing = _.filter(_.difference(allDeps, _.keys(cs)), function(appn) {
-                if(/^db_/.test(appn))   return false; // don't count db_* apps as missing, they should be injected with false when required as dep
-                return true;
-            });
-		
-        var actualMissing = _.without(missing,'config','req');
-        if(actualMissing.length) {
-            console.error('! Missing app dependencies: '+ actualMissing.join(' ') + ' - check case?');
-            return cs;
-        }
-		
-		toload = allDeps.length;
-        
-        console.log('+ Loading '+toload+' app'+(toload==1?'':'s'));
-		
-		var itmax = 10
-		  , count = 0;
-        
-        while(selfi.loaded != toload && count<itmax)
-        {
-            selfi.skipped = false;
-            
-            _.each(allDeps, function(cname) {
-			
-				selfi.require(cname, cs);
-            });
-            
-            if(selfi.skipped && selfi.loaded == lastload) {
-                console.error('! Circular load issue with app dependencies.');
-                return;
-            }
-            
-            lastload = selfi.loaded;
-			count++;
-        }
-        
-        return cs;
-        
+        return selfi.loadApps(cs);
     });
 };
 
 /*
- * app = router instance
+ * Apps - app tree builder & loader
+ * 
+ * - config, Mullet config object
  */
 function Apps(config) {
     
@@ -440,6 +431,7 @@ function Apps(config) {
         return new Apps(config);
     }
 
+    this.apps = {};
     this.path = config.path;
     this.config = config;
 }
