@@ -1,75 +1,86 @@
 #! /usr/bin/env node
 
-var PromiseApi = require('es6-promise')
+// TODO: check whether there's a mullet app in this directory
+
+var Cli = require('simpcli')
+  , forever = require('forever')
+  , fs = require('fs')
+  , spawn = require('child_process').spawn
+  , pathlib = require('path')
+  , mkdirp = require('mkdirp')
+  , PromiseApi = require('es6-promise')
   , Promise = PromiseApi.Promise
   , exec = require('child_process').exec
-  , path = require('path')
   , config = require('./config')
   , Apps = require('./apps');
-
-function Cli(argList, flags) {
-    this.args = process.argv.slice(2);
-    
-    this.tasks = this.args.map(function(arg, idx) {
-        var tdef = argList[arg],
-            task = tdef && typeof tdef === 'object' 
-                    ? Object.create(argList[arg]) 
-                    : ( typeof tdef === 'function' ? { fn: tdef } : false );
-        if(task) {
-            task.name = arg;
-            task.pos = idx;
-        }
-        return task;
-        
-    }).filter(function(task) { return !!task; });
-    
-    this.flags = this.args.filter(function(arg) {
-        return arg.indexOf('-')==0;
-    });
-    
-    this.argList = argList;
-    this.flagList = flags;
-    
-    var promise = Promise.resolve();
-
-    this.chain = this.tasks.reduce(function(sequence, task) {
-        return sequence.then(function(last) {
-            return this.runTask(task);
-        }.bind(this));
-    }.bind(this), promise);
-}
-
-Cli.prototype.getArgs = function(pos) {
-    var args = this.args.slice(pos+1)
-      , foundOther = false;
-
-    return args.filter(function(arg) {
-        if(this.argList[arg])   foundOther = true;
-        return !foundOther && arg;
-    }.bind(this));
-};
-
-Cli.prototype.defer = function(resolver) {
-    return new Promise(resolver);
-};
-
-Cli.prototype.exec = exec;
-
-Cli.prototype.runTask = function(taskCfg) {
-    var args = this.getArgs(taskCfg.pos);
-    return taskCfg.fn ? taskCfg.fn.apply(this, args) : console.warn('Invalid taskCfg '+taskCfg.name);
-};
-    
-Cli.prototype.print = function() {
-    console.log.apply(console, [].slice.call(arguments,0));
-};
-
 
 config.path = 'D:/Dev/Vagrant/mulletapp';
 var apps = new Apps(config)
 
   , MulletCli = {
 
+        /*
+         * start() - runs mullet app.js
+         * 
+         * TODO: find a way to use forever to do this
+         */
+        'start': function() {
+            this.print('Starting your app...');
+            exec('node app.js', function(err, stdout, stderr) {
+                // TODO: run checks for whether app.js exists (package.json, common main file names)
+                if(err) return this.print(err);
+                else    this.print(stdout, stderr);
+            }.bind(this));
+        },
+      
+        'mongo': function(args) {
+            
+            var pids;
+            try {
+                pids = require(pathlib.resolve('./proclock.json'));
+            } catch(e) {
+                pids = {};
+                this.print(e);
+            }
+            
+            if(args && args=='stop') {
+                if(!pids.mongo)
+                    return this.print('Mongo is not running.');
+                
+                try {
+                    process.kill(pids.mongo, 'SIGINT');
+                    this.print('Mongo stop signalled');
+                } catch(e) {
+                    this.print(e);
+                }
+                
+                delete pids.mongo
+                fs.writeFileSync('./proclock.json', JSON.stringify(pids));
+                return;
+            }
+            
+            if(pids.mongo)
+                return this.print('Mongo already appears to be running.');
+            
+            this.print('Starting mongo...');
+            mkdirp('logs', function(err) {
+                
+                var outFD = fs.openSync(pathlib.resolve( './logs/stdout' ), 'a')
+                  , errFD = fs.openSync(pathlib.resolve( './logs/stderr' ), 'a');
+                
+                var child = spawn('c:/users/wes/documents/apps/mongodb/bin/mongod', ['--dbpath','c:/users/wes/documents/data/mongodb'], {
+                    stdio:      ['ignore', outFD, errFD],
+                    detached:   true
+                });
+                
+                pids['mongo'] = child.pid;
+                fs.writeFileSync('./proclock.json', JSON.stringify(pids));
+                
+                child.unref();
+                
+            });
+        },
+      
         /*
          * list - lists all installed apps
          */
@@ -117,7 +128,15 @@ var apps = new Apps(config)
                         if(resp.err)
                             str += 'no repo';
                         else
-                            str += resp.stdout.indexOf('not staged')>0 ? 'dirty' : ( resp.stdout.indexOf('nothing to commit')>0 ? 'clean' : resp.stdout );
+                            str += resp.stdout.indexOf('not staged')>0 
+                                    ? 'dirty' 
+                                    : ( resp.stdout.indexOf('nothing to commit')>0 
+                                        ? 'clean' 
+                                        : ( resp.stdout.indexOf('untracked files present')>0
+                                            ? 'dirty'
+                                            : resp.stdout 
+                                          )
+                                      );
                         
                         this.print(str);
                         
@@ -162,5 +181,5 @@ cli.chain.then(function() {
     // do something before about to exit
 })
 .catch(function(err) {
-    console.error(err);
+    cli.print('Error:', err.stack);
 });

@@ -94,11 +94,17 @@ Apps.prototype.traverse = function(basePath, existing) {
  * returns an array of strings representing variable names used in provided function
  **/
 Apps.prototype.getDeps = function(func) {
+
+	// TODO: make note that all apps should have lowercase folder names in order to comply with aNyCaSe dep injection
+	// *or* store an 'original' value of the app's folder name in the app prop hash and base all FS lookups on that, while indexing by lowerCase name
+
+	if(typeof func !== 'function')	return [];
     var fnStr = func.toString().replace(Apps.STRIP_COMMENTS, '');
     var result = fnStr.slice(fnStr.indexOf('(')+1, fnStr.indexOf(')')).match(/([^\s,]+)/g);
     if(result === null)
         result = [];
-    return result;
+	
+    return _.map(result, function(dep) { return dep.toLowerCase(); });
 };
 
 /**
@@ -244,7 +250,7 @@ Apps.prototype.buildInfo = function(dirs) {
         }
 
         var deps = _.map(selfi.getDeps(cmain.main), function(dep) {
-            return dep=='db__DRIVER' ? selfi.config.dbdriver : dep;
+            return dep=='db__driver' ? selfi.config.dbdriver : dep;
         });
 
         apps[name] = _.extend(cmain, {
@@ -302,8 +308,8 @@ Apps.prototype.load = function(appName) {
     var deps = _.map(mod.deps, function(dep) {
 
         var api = selfi.apps[dep] ? selfi.apps[dep].api : false;
-
-        if(typeof api === 'function') {
+		
+        if(typeof api === 'function' && !(api instanceof Promise)) {
             api = new (api.bind.apply(api, selfi.getAppArgs(mod, api.constructorArgs || selfi.getDeps(api))))();
         }
 
@@ -313,12 +319,32 @@ Apps.prototype.load = function(appName) {
     // returned value becomes the app's exposed controller class
     if(mod && typeof mod.main ===  "function") {
         console.log('  - '+appName);
-        req = mod.api = mod.main.apply(null, deps);
+		var api = mod.main.apply(null, deps);
+		if(api instanceof Promise)
+			return api.then(function(actualApi) {
+				selfi.apps[appName].api = actualApi;
+			});
+			
+        mod.api = api;
     }
+    else if(mod && typeof mod.main === 'object')
+        mod.api = _.clone(mod.main);
+    
     if(!mod) mod = {};
-    if(!mod.api) req = mod.api = false;
+    if(!mod.api) mod.api = false;
     
     return mod.api;
+};
+
+Array.prototype.move = function (old_index, new_index) {
+    if (new_index >= this.length) {
+        var k = new_index - this.length;
+        while ((k--) + 1) {
+            this.push(undefined);
+        }
+    }
+    this.splice(new_index, 0, this.splice(old_index, 1)[0]);
+    return this; // for testing purposes
 };
 
 /*
@@ -329,16 +355,22 @@ Apps.prototype.load = function(appName) {
  * returns a Promise that resolves to the final app hash
  */
 Apps.prototype.loadApps = function(cs) {
-    this.apps = cs;
+    this.config._apps = this.apps = cs;
     
     var selfi = this,
     
         entryApps = _.filter(cs, function(c,name) {
-            var vhost = c && c.info && c.info.mullet && c.info.mullet.vhost;
-            return typeof vhost === 'string' ? true : false;
+            var vhost = c && c.info && c.info.mullet && c.info.mullet.vhost
+			  , hasPriority = c && c.info && c.info.mullet && (c.info.mullet.run || !!c.info.mullet.priority);
+			  
+            return typeof vhost === 'string' || _.isArray(vhost) || hasPriority ? true : false;
         }),
 
         allDeps = selfi.getLoadOrder(cs,selfi.buildDepTree(cs, entryApps)),
+        
+        withPriority = _.filter(cs, function(c,name) {
+            return c && c.info && c.info.mullet && (c.info.mullet.run || !!c.info.mullet.priority);
+        }),
 
         missing = _.filter(_.difference(allDeps, _.keys(cs)), function(appn) {
             if(/^db_/.test(appn))   return false; // don't count db_* apps as missing, they should be injected with false when required as dep
@@ -349,6 +381,22 @@ Apps.prototype.loadApps = function(cs) {
     if(actualMissing.length) {
         console.error('! Missing app dependencies: '+ actualMissing.join(' ') + ' - check case?');
         return cs;
+    }
+    
+	// enforce run ordering over topo sort, need to document that run: first must NOT have deps other than those built-in
+	
+    if(withPriority.length) {
+        _.each(withPriority, function(c) {
+			if(allDeps.indexOf(c.name)==-1)
+				return;
+				
+			switch(c.info.mullet.run) {
+				case "last":
+					allDeps.move( allDeps.indexOf(c.name), allDeps.length-1); break;
+				case "first":
+					allDeps.move( allDeps.indexOf(c.name), 0); break;
+			}
+		});
     }
 
     var toload = _.without(allDeps, 'config').length;
@@ -361,8 +409,12 @@ Apps.prototype.loadApps = function(cs) {
         var chain = lastApp.then(function(lastApi) {
             /*if(index==0)
                 console.log('START');
-            else console.log(allDeps[index-1], typeof lastApi, lastApi && lastApi.constructor && lastApi.constructor.name);*/
-            
+            else console.log(allDeps[index-1], typeof lastApi, lastApi && lastApi.constructor && lastApi.constructor.name, typeof lastApi === 'object' ? Object.keys(lastApi) : '');*/
+			
+			var lastApp = selfi.apps[allDeps[index-1]];
+			if(lastApp && !lastApp.api)
+				lastApp.api = lastApi;
+			
             return selfi.load(appName);
         });
         

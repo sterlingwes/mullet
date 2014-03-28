@@ -1,29 +1,23 @@
-var _ = require('underscore');
-
-require('./config');
+var _ = require('underscore')
+  , Mullet;
 
 var api = {
     
     init: function(config) {
         
-        if(typeof config === "object")
-        {
-            for(key in config)
-            {
-                if(typeof Mullet.config[key] !== 'undefined')
-                    Mullet.config[key] = config[key]; // only override defaults
-            }
-        }
+        var defaults = require('./config');
+        _.extend( defaults.config, config || {} );
+        Mullet = defaults;
 
         Mullet._appman = require('./apps.js')(Mullet.config);
         return Mullet._appman;
     },
     
     start: function(config) {
-
+        
         var app = api.init(config);
         
-        Mullet.app.setup()
+        app.setup()
         
             .then(function(apps) {
                 if(!apps)
@@ -44,7 +38,7 @@ var api = {
     traverse: function(config) {
         
         var app = api.init(config);
-        return Mullet.app.traverseAll();
+        return app.traverseAll();
         
     }
     

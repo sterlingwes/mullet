@@ -8,7 +8,7 @@ var appPath = path.dirname(require.main.filename).replace(/\\/g,'/'),
 app.use(express.json());
 app.use(express.urlencoded());
 
-module.exports = global.Mullet = {
+module.exports = {
     
     config:
     {

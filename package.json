@@ -8,7 +8,8 @@
     "underscore": "~1.5.2",
     "rsvp": "~3.0.3",
     "walk": "~2.2.1",
-    "jasmine-node": ""
+    "jasmine-node": "",
+    "simpcli": ""
   },
   "scripts": {
     "test": "jasmine-node spec"
