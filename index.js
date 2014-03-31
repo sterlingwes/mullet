@@ -26,7 +26,7 @@ var api = {
                 _.extend(Mullet.config._apps, apps);
 
                 if(Mullet.config.runOnInit) {
-                    Mullet.app.listen(3000);
+                    Mullet.config.app.listen(3000);
                     console.log('- Listening on port 3000');
                 }
 

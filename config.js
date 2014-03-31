@@ -17,10 +17,12 @@ module.exports = {
         mulletPath:     mulletPath,
         mainApp:        '', // app served at node root (ie 'localhost:3000/')
         adminHost:      '', // host for admin site in a multi-site environment
+        dbName:         'mullet',
         dbdriver:       'db_file',
         siteTitle:      '',
         devel:          true,
         cleanOnStart:   false,
+        runOnInit:      true,
         sessions:       {},
 		app:			app,
 		_express:		express,
