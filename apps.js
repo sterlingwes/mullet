@@ -309,7 +309,7 @@ Apps.prototype.load = function(appName) {
 
         var api = selfi.apps[dep] ? selfi.apps[dep].api : false;
 		
-        if(typeof api === 'function' && !(api instanceof Promise) && !api.noproto) {
+        if(typeof api === 'function' && !(api instanceof Promise)) {
             api = new (api.bind.apply(api, selfi.getAppArgs(mod, api.constructorArgs || selfi.getDeps(api))))();
         }
 
